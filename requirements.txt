@@ -12,8 +12,7 @@ wandb>=0.15.0  # Experiment tracking
 accelerate>=0.24.0  # Easier distributed training
 
 # For transformer engine (FP8 support)
-JAX>=0.4.7
---no-build-isolation git+https://github.com/NVIDIA/TransformerEngine.git@stable
+jax>=0.4.7,<0.5.0
 
 # Performance optimizations
 triton>=2.1.0  # For Lion optimizer acceleration
