@@ -1,0 +1,33 @@
+# Core dependencies for DeltaNetDiT training
+torch>=2.1.0
+torchvision>=0.16.0
+numpy>=1.24.0
+einops>=0.7.0
+tqdm>=4.65.0
+tensorboard>=2.14.0
+matplotlib>=3.7.0
+
+# Optional but recommended
+wandb>=0.15.0  # Experiment tracking
+accelerate>=0.24.0  # Easier distributed training
+
+# For transformer engine (FP8 support)
+jax>=0.4.7,<0.5.0
+
+# Performance optimizations
+triton>=2.1.0  # For Lion optimizer acceleration
+flash-attn>=2.0.0  # For optimized attention
+
+# Data processing
+pillow>=10.0.0
+opencv-python>=4.8.0
+albumentations>=1.3.0  # For augmentations
+
+# Utilities
+pyyaml>=6.0
+jsonlines>=3.1.0
+h5py>=3.9.0  # For HDF5 datasets
+
+
+# Configuration management
+omegaconf>=2.3.0
