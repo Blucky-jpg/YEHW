@@ -20,9 +20,9 @@ from enhanced.global_scheduler import get_global_scheduler, register_default_sch
 # Core optimized layers (used within components)
 from enhanced.quantization import QuantizedLinear
 
-# BF16 optimization (optional)
+# BF16 optimization (from quantization module)
 try:
-    from enhanced.bf16_optimizer import BF16Optimizer, optimize_model_for_bf16
+    from enhanced.quantization import BF16Optimizer, optimize_model_for_bf16
     BF16_AVAILABLE = True
 except ImportError:
     BF16_AVAILABLE = False
