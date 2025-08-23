@@ -230,23 +230,23 @@ class TiTokDecoder(nn.Module):
         # Project to hidden size
         x = self.token_proj(x)  # (B, num_latent_tokens, hidden_size)
 
-        # For now, just repeat the tokens to match the expected patch count
-        # This is a simplified approach for debugging
-        if self.num_latent_tokens < self.num_patches:
-            # Repeat tokens to fill the patch grid
-            repeat_factor = (self.num_patches + self.num_latent_tokens - 1) // self.num_latent_tokens
-            x = x.repeat(1, repeat_factor, 1)  # Repeat along sequence dimension
-            x = x[:, :self.num_patches, :]  # Truncate to exact size
-            x = x + self.pos_embed
-        elif self.num_latent_tokens > self.num_patches:
-            # If we have more tokens than patches, use adaptive pooling
-            x = x.transpose(1, 2)  # (B, hidden_size, num_latent_tokens)
-            x = F.adaptive_avg_pool1d(x, self.num_patches)
-            x = x.transpose(1, 2)  # (B, num_patches, hidden_size)
-            x = x + self.pos_embed
-        else:
-            # If tokens match patches exactly, use position embedding as is
-            x = x + self.pos_embed
+        # Ensure we have the right number of tokens for the positional embedding
+        current_tokens = x.shape[1]
+
+        if current_tokens != self.num_patches:
+            if current_tokens < self.num_patches:
+                # Repeat tokens to fill the patch grid
+                repeat_factor = (self.num_patches + current_tokens - 1) // current_tokens
+                x = x.repeat(1, repeat_factor, 1)  # Repeat along sequence dimension
+                x = x[:, :self.num_patches, :]  # Truncate to exact size
+            else:
+                # If we have more tokens than patches, use adaptive pooling
+                x = x.transpose(1, 2)  # (B, hidden_size, current_tokens)
+                x = F.adaptive_avg_pool1d(x, self.num_patches)
+                x = x.transpose(1, 2)  # (B, num_patches, hidden_size)
+
+        # Now add positional embedding with matching size
+        x = x + self.pos_embed
 
         # Transformer layers
         for layer in self.layers:
@@ -274,13 +274,28 @@ class TiTokTokenizer(nn.Module):
     3. Optional decoder for reconstruction with two-stage training
     """
 
-    def __init__(self, config):
+    def __init__(self, config=None, **kwargs):
         super().__init__()
 
-        if isinstance(config, dict):
-            config = OmegaConf.create(config) if OMEGACONF_AVAILABLE else config
+        # Handle both config-based and parameter-based initialization
+        if config is not None:
+            # Config-based initialization (backward compatibility)
+            if isinstance(config, dict):
+                config = OmegaConf.create(config) if OMEGACONF_AVAILABLE else config
+            self.config = config
+        elif kwargs:
+            # Parameter-based initialization
+            self.config = self._create_config_from_params(**kwargs)
+        else:
+            # Default initialization - create with default parameters
+            self.config = self.create_default_config()
 
-        self.config = config
+        # Ensure config is not None
+        if self.config is None:
+            raise ValueError("Config cannot be None. Please provide either a config or parameters.")
+
+        # Validate required config attributes
+        self._validate_config()
 
         # This should be False for stage1 and True for stage2
         self.finetune_decoder = config.model.vq_model.get("finetune_decoder", False)
@@ -336,6 +351,74 @@ class TiTokTokenizer(nn.Module):
                 use_l2_norm=True,
             )
             self.pixel_decoder = SimplePixelDecoder(config)
+
+    def _create_config_from_params(self, **kwargs) -> dict:
+        """
+        Create config dictionary from individual parameters.
+        Uses the existing create_default_config as a base and overrides with provided params.
+        """
+        # Start with default config
+        config = self.create_default_config()
+
+        # Map parameter names to config structure
+        param_mapping = {
+            'input_size': ['model', 'encoder', 'input_size'],
+            'patch_size': ['model', 'encoder', 'patch_size'],
+            'hidden_size': ['model', 'encoder', 'hidden_size'],
+            'num_layers': ['model', 'encoder', 'num_layers'],
+            'num_heads': ['model', 'encoder', 'num_heads'],
+            'mlp_ratio': ['model', 'encoder', 'mlp_ratio'],
+            'num_tokens': ['model', 'vq_model', 'num_latent_tokens'],
+            'num_latent_tokens': ['model', 'vq_model', 'num_latent_tokens'],
+            'codebook_size': ['model', 'vq_model', 'codebook_size'],
+            'code_dim': ['model', 'vq_model', 'token_size'],
+            'token_size': ['model', 'vq_model', 'token_size'],
+            'commitment_cost': ['model', 'vq_model', 'commitment_cost'],
+            'use_l2_norm': ['model', 'vq_model', 'use_l2_norm'],
+            'finetune_decoder': ['model', 'vq_model', 'finetune_decoder'],
+            'use_decoder': ['model', 'vq_model', 'finetune_decoder'],  # Alias
+            'quantize_mode': ['model', 'vq_model', 'quantize_mode'],
+            'use_fp16': ['model', 'vq_model', 'use_fp16'],  # FP16 support
+            'use_fp8': ['model', 'vq_model', 'use_fp8'],  # FP8 support (if needed)
+        }
+
+        # Apply parameter overrides
+        for param_name, param_value in kwargs.items():
+            if param_name in param_mapping:
+                # Navigate to the config location and set the value
+                current_dict = config
+                path = param_mapping[param_name]
+                for key in path[:-1]:
+                    if key not in current_dict:
+                        current_dict[key] = {}
+                    current_dict = current_dict[key]
+                current_dict[path[-1]] = param_value
+            else:
+                raise ValueError(f"Unknown parameter: {param_name}")
+
+        return config
+
+    def _validate_config(self):
+        """Validate that the config has all required attributes."""
+        if self.config is None:
+            raise ValueError("Config cannot be None")
+
+        # Check if config is a dictionary
+        if isinstance(self.config, dict):
+            if 'model' not in self.config:
+                raise ValueError("Config must contain 'model' key")
+            if 'encoder' not in self.config['model']:
+                raise ValueError("Config model must contain 'encoder' key")
+            if 'vq_model' not in self.config['model']:
+                raise ValueError("Config model must contain 'vq_model' key")
+        else:
+            # Check if it's an OmegaConf object or similar
+            if not hasattr(self.config, 'model'):
+                raise ValueError("Config must have 'model' attribute")
+            if not hasattr(self.config.model, 'encoder'):
+                raise ValueError("Config model must have 'encoder' attribute")
+            if not hasattr(self.config.model, 'vq_model'):
+                raise ValueError("Config model must have 'vq_model' attribute")
 
     def _init_weights(self, module):
         """Initialize weights as per the official implementation."""
@@ -443,6 +526,8 @@ class TiTokTokenizer(nn.Module):
         commitment_cost: float = 0.25,
         use_l2_norm: bool = True,
         finetune_decoder: bool = False,
+        use_fp16: bool = False,
+        use_fp8: bool = False,
     ) -> dict:
         """Create a default configuration for TiTok tokenizer."""
         config = {
@@ -463,6 +548,8 @@ class TiTokTokenizer(nn.Module):
                     "use_l2_norm": use_l2_norm,
                     "finetune_decoder": finetune_decoder,
                     "quantize_mode": "vq",
+                    "use_fp16": use_fp16,
+                    "use_fp8": use_fp8,
                 }
             }
         }
