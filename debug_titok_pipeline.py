@@ -235,9 +235,9 @@ class DebugTiTokPipeline:
         # Override model config
         train_config.model_config = model_config
 
-        # Create datasets
-        train_data = [(img, label) for img, label in train_dataset]
-        val_data = [(img, label) for img, label in val_dataset]
+        # Create datasets - SyntheticDataset only returns images, not (img, label) tuples
+        train_data = [(img, 0) for img in train_dataset]  # Add dummy labels
+        val_data = [(img, 0) for img in val_dataset]
 
         # Create trainer
         trainer = DeltaNetDiTTrainer(train_config)
