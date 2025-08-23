@@ -23,7 +23,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from torchvision import transforms
 from PIL import Image
 
@@ -105,7 +105,7 @@ class TiTokTrainer:
         )
 
         # AMP scaler
-        self.scaler = GradScaler() if use_amp else None
+        self.scaler = GradScaler('cuda') if use_amp else None
 
         # Directories
         self.checkpoint_dir = Path(checkpoint_dir)
@@ -166,7 +166,7 @@ class TiTokTrainer:
                         targets = images
 
                 # Forward pass
-                with autocast(enabled=self.use_amp):
+                with autocast('cuda', enabled=self.use_amp):
                     tokens, quantized, commit_loss, reconstructed = self.tokenizer(images)
 
                     # Reconstruction loss
@@ -180,11 +180,31 @@ class TiTokTrainer:
 
                 # Backward pass
                 if self.scaler is not None:
-                    self.scaler.scale(total_loss).backward()
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
+                    try:
+                        self.scaler.scale(total_loss).backward()
+
+                        # Clip gradients to prevent inf/nan values
+                        self.scaler.unscale_(self.optimizer)
+                        torch.nn.utils.clip_grad_norm_(self.tokenizer.parameters(), max_norm=1.0)
+
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                    except ValueError as e:
+                        if "Attempting to unscale FP16 gradients" in str(e):
+                            self.logger.warning("Detected inf gradients, skipping this step and disabling AMP for this batch")
+                            # Skip this step and reset for next batch
+                            self.optimizer.zero_grad()
+                            # Optionally disable AMP for a few steps to recover
+                            self.use_amp = False
+                            self.scaler = None
+                        else:
+                            raise e
                 else:
                     total_loss.backward()
+
+                    # Clip gradients to prevent inf/nan values
+                    torch.nn.utils.clip_grad_norm_(self.tokenizer.parameters(), max_norm=1.0)
+
                     self.optimizer.step()
 
                 self.optimizer.zero_grad()
@@ -267,7 +287,7 @@ class TiTokTrainer:
                 images = images.to(self.device)
 
                 # Forward pass
-                with autocast(enabled=self.use_amp):
+                with autocast('cuda', enabled=self.use_amp):
                     tokens, quantized, commit_loss, reconstructed = self.tokenizer(images)
 
                     # Reconstruction loss
